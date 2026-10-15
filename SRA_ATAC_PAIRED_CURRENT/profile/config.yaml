@@ -1,0 +1,41 @@
+executor: cluster-generic
+cluster-generic-submit-cmd: >-
+  mkdir -p logs/{rule} &&
+  sbatch
+  --partition={resources.partition}
+  --qos={resources.qos}
+  --cpus-per-task={threads}
+  --mem={resources.mem_mb}
+  --time={resources.time}
+  --gres={resources.gres}
+  --job-name=smk-{rule}-{wildcards}
+  --output=logs/{rule}/{rule}-{wildcards}-%j.out
+default-resources:
+  - partition=slim16
+  - qos=normal
+  - mem_mb=1000
+  - time=60
+  - gres=gpu:0
+# threads and mem_mb are declared in the Snakefile (so local runs work too);
+# only wall time is set here.
+set-resources:
+  - fastq_dump:time=180
+  - fastp:time=120
+  - index_bowtie:time=120
+  - bowtie:time=480
+  - remove_mito:time=60
+  - bam_to_fragments:time=60
+  - bed2rangeAndcoverage:time=120
+  - bam_qc:time=60
+  - macs2:time=120
+  - multiqc:time=30
+restart-times: 3
+max-jobs-per-second: 10
+max-status-checks-per-second: 1
+local-cores: 1
+latency-wait: 60
+jobs: 200
+keep-going: True
+rerun-incomplete: True
+printshellcmds: True
+scheduler: greedy

@@ -1,0 +1,14 @@
+# data / results
+raw/
+sra/
+*_out/
+peak_calls/
+bowtie_index/
+qc/
+logs/
+genome.fa
+genome.fa.gz
+genome_size.txt
+dag.svg
+.snakemake/
+.DS_Store

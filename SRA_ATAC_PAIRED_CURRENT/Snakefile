@@ -1,0 +1,276 @@
+configfile: "config.yaml"
+
+import pandas as pd
+
+sample_table = pd.read_table("SraRunTable.csv", sep=",")
+samples = list(sample_table['Sample Name'].unique())
+
+MITO = config.get('mito_name', '')
+MAXINS = int(config.get('bowtie_maxins', 2000))
+MIN_MAPQ = int(config.get('min_mapq', 30))
+MACS2_BROAD = config.get('macs2_broad', False)
+MACS2_PVALUE = config.get('macs2_pvalue', 0.001)
+peak_suffix = "broadPeak" if MACS2_BROAD else "narrowPeak"
+
+# optional: reuse an existing bowtie2 index / known genome size
+USER_INDEX = config.get('bowtie_index')
+INDEX_PREFIX = USER_INDEX if USER_INDEX else "bowtie_index/genome"
+INDEX_FLAG = (USER_INDEX + ".1.bt2") if USER_INDEX else "bowtie_index/genome.done"
+USER_GSIZE = config.get('genome_size')
+MAX_SPOTS = int(config.get('max_spots', 0))
+
+def runs_of(sn):
+    return list(sample_table[sample_table['Sample Name'] == sn].Run)
+
+# compute nodes have no internet
+localrules: all, prefetch, getGenomeFasta
+
+
+rule all:
+    input:
+        expand("peak_calls/{SN}_peaks." + peak_suffix, SN=samples),
+        expand("{SN}_out/{SN}_ranges.rds", SN=samples),
+        expand("{SN}_out/{SN}_coverage.bw", SN=samples),
+        "qc/multiqc_report.html"
+
+
+rule macs2:
+    input:
+        bam="{SN}_out/{SN}.bam",
+        gsize=lambda wc: [] if USER_GSIZE else "genome_size.txt"
+    output:
+        "peak_calls/{SN}_peaks." + peak_suffix
+    params:
+        gsize=lambda wc, input: str(USER_GSIZE) if USER_GSIZE else open(input.gsize).read().strip(),
+        pvalue=MACS2_PVALUE,
+        broad_flag="--broad" if MACS2_BROAD else ""
+    log:
+        "peak_calls/{SN}_macs2.log"
+    resources:
+        mem_mb=16000
+    shell:
+        """
+        macs2 callpeak \
+            -t {input.bam} \
+            -f BAMPE \
+            --nomodel --keep-dup all \
+            -p {params.pvalue} \
+            -g {params.gsize} \
+            --outdir peak_calls \
+            -n {wildcards.SN} \
+            {params.broad_flag} \
+            2> {log}
+        """
+
+
+# Fragments (chrom, start, end) from proper pairs: the upstream mate of each
+# pair has TLEN > 0, so no name-sorting / bamToBed is needed.
+rule bam_to_fragments:
+    input:
+        "{SN}_out/{SN}.bam"
+    output:
+        temp("{SN}_out/{SN}.bed")
+    threads: 2
+    resources:
+        mem_mb=2000
+    shell:
+        """
+        samtools view -@ {threads} -f 0x2 {input} | \
+            awk -v OFS='\t' '$9 > 0 {{print $3, $4 - 1, $4 - 1 + $9}}' > {output}
+        """
+
+
+rule bed2rangeAndcoverage:
+    input:
+        "{SN}_out/{SN}.bed"
+    output:
+        rds="{SN}_out/{SN}_ranges.rds",
+        bw="{SN}_out/{SN}_coverage.bw"
+    resources:
+        mem_mb=24000
+    shell:
+        "Rscript --vanilla scripts/bed2rAc.R {input} {output.rds} {output.bw}"
+
+
+# Final BAM: mitochondrial reads removed (their share is kept in the idxstats
+# of the unfiltered BAM for MultiQC).
+rule remove_mito:
+    input:
+        bam="{SN}_out/{SN}.all.bam",
+        bai="{SN}_out/{SN}.all.bam.bai"
+    output:
+        bam="{SN}_out/{SN}.bam",
+        bai="{SN}_out/{SN}.bam.bai",
+        idxstats="{SN}_out/{SN}.idxstats"
+    params:
+        mito=MITO
+    threads: 4
+    resources:
+        mem_mb=4000
+    shell:
+        """
+        samtools idxstats {input.bam} > {output.idxstats}
+        if [ -n "{params.mito}" ]; then
+            cut -f1 {output.idxstats} | grep -qxF "{params.mito}" || \
+                echo "WARNING: mito_name '{params.mito}' not found in BAM header" >&2
+            awk -v OFS='\t' -v m="{params.mito}" '$1 != m && $1 != "*" {{print $1, 0, $2}}' \
+                {output.idxstats} > {wildcards.SN}_out/keep.bed
+            samtools view -@ {threads} -b -L {wildcards.SN}_out/keep.bed -o {output.bam} {input.bam}
+            rm {wildcards.SN}_out/keep.bed
+        else
+            cp {input.bam} {output.bam}
+        fi
+        samtools index -@ {threads} {output.bam}
+        """
+
+
+# proper pairs -> name sort -> both mates MAPQ >= min_mapq -> fixmate -> coordinate
+# sort -> drop duplicates (uncompressed BAM between the pipe stages)
+rule bowtie:
+    input:
+        mate1=lambda wc: expand("trimmed/{run}_1.fastq.gz", run=runs_of(wc.SN)),
+        mate2=lambda wc: expand("trimmed/{run}_2.fastq.gz", run=runs_of(wc.SN)),
+        index=INDEX_FLAG
+    params:
+        mate1=lambda wc: ",".join(expand("trimmed/{run}_1.fastq.gz", run=runs_of(wc.SN))),
+        mate2=lambda wc: ",".join(expand("trimmed/{run}_2.fastq.gz", run=runs_of(wc.SN))),
+        index=INDEX_PREFIX,
+        maxins=MAXINS,
+        mapq=MIN_MAPQ
+    output:
+        bam=temp("{SN}_out/{SN}.all.bam"),
+        bai=temp("{SN}_out/{SN}.all.bam.bai")
+    log:
+        align="{SN}_out/alignstats.txt",
+        markdup="{SN}_out/markdup_stats.txt"
+    threads: 16
+    resources:
+        mem_mb=48000
+    shell:
+        """
+        bowtie2 -p {threads} -X {params.maxins} --no-discordant --no-mixed --no-unal \
+            -x {params.index} -1 {params.mate1} -2 {params.mate2} 2> {log.align} | \
+            samtools view -u -f 0x2 | \
+            samtools sort -u -n -m 2G -@ 4 -T {wildcards.SN}_out/tmp_ns | \
+            samtools view -h | \
+            awk -F'\\t' -v minq={params.mapq} -f scripts/filter_mapq_pairs.awk | \
+            samtools fixmate -u -m -@ 4 - - | \
+            samtools sort -u -m 2G -@ 4 -T {wildcards.SN}_out/tmp_cs | \
+            samtools markdup -r -@ 4 -f {log.markdup} - {output.bam}
+        samtools index -@ {threads} {output.bam}
+        """
+
+
+rule bam_qc:
+    input:
+        "{SN}_out/{SN}.bam"
+    output:
+        flagstat="{SN}_out/{SN}.flagstat",
+        stats="{SN}_out/{SN}.stats"
+    threads: 2
+    resources:
+        mem_mb=2000
+    shell:
+        """
+        samtools flagstat -@ {threads} {input} > {output.flagstat}
+        samtools stats -@ {threads} {input} > {output.stats}
+        """
+
+
+rule multiqc:
+    input:
+        expand("{SN}_out/alignstats.txt", SN=samples),
+        expand("{SN}_out/{SN}.flagstat", SN=samples),
+        expand("{SN}_out/{SN}.stats", SN=samples),
+        expand("{SN}_out/{SN}.idxstats", SN=samples),
+        expand("qc/fastp/{run}.json", run=list(sample_table['Run']))
+    output:
+        "qc/multiqc_report.html"
+    resources:
+        mem_mb=4000
+    shell:
+        "multiqc -f -q -n multiqc_report.html -o qc {input}"
+
+
+# adapter trimming (Nextera read-through is common in ATAC); adapters are
+# auto-detected from the paired reads
+rule fastp:
+    input:
+        r1="raw/{SRR}_1.fastq.gz",
+        r2="raw/{SRR}_2.fastq.gz"
+    output:
+        r1=temp("trimmed/{SRR}_1.fastq.gz"),
+        r2=temp("trimmed/{SRR}_2.fastq.gz"),
+        json="qc/fastp/{SRR}.json",
+        html="qc/fastp/{SRR}.html"
+    threads: 8
+    resources:
+        mem_mb=4000
+    shell:
+        """
+        fastp -i {input.r1} -I {input.r2} -o {output.r1} -O {output.r2} \
+            --detect_adapter_for_pe --length_required 20 --qualified_quality_phred 10 \
+            -w {threads} -j {output.json} -h {output.html} 2> /dev/null
+        """
+
+
+rule fastq_dump:
+    input:
+        "sra/{SRR}/{SRR}.sra"
+    output:
+        temp("raw/{SRR}_1.fastq.gz"),
+        temp("raw/{SRR}_2.fastq.gz")
+    params:
+        spots=f"-X {MAX_SPOTS}" if MAX_SPOTS > 0 else ""
+    resources:
+        mem_mb=2000
+    shell:
+        """
+        fastq-dump --split-3 --gzip {params.spots} {input} --outdir raw
+        rm -rf sra/{wildcards.SRR}
+        """
+
+
+rule prefetch:
+    output:
+        "sra/{SRR}/{SRR}.sra"
+    shell:
+        "prefetch --max-size 100G -O sra {wildcards.SRR}"
+
+
+rule getGenomeFasta:
+    params:
+        genomeLocation=config['genomeFTP']
+    output:
+        temp("genome.fa")
+    shell:
+        """
+        wget -q -O genome.fa.gz {params.genomeLocation}
+        gunzip -f genome.fa.gz
+        """
+
+
+# effective genome size = number of A/C/G/T bases
+rule get_genome_size:
+    input:
+        "genome.fa"
+    output:
+        "genome_size.txt"
+    shell:
+        "grep -v '>' {input} | tr -cd 'ACGTacgt' | wc -c > {output}"
+
+
+rule index_bowtie:
+    input:
+        "genome.fa"
+    output:
+        "bowtie_index/genome.done"
+    threads: 16
+    resources:
+        mem_mb=32000
+    shell:
+        """
+        mkdir -p bowtie_index
+        bowtie2-build --threads {threads} {input} bowtie_index/genome
+        touch {output}
+        """

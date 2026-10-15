@@ -1,0 +1,29 @@
+# Reference genome (gzipped FASTA, downloaded on the login node)
+genomeFTP: https://ftp.ensembl.org/pub/release-115/fasta/drosophila_melanogaster/dna/Drosophila_melanogaster.BDGP6.54.dna.toplevel.fa.gz
+
+# Name of the mitochondrial sequence in the FASTA (Ensembl: "MT" for most
+# species, "mitochondrion_genome" for Drosophila). Reads on it are removed from
+# the final BAM; the fraction is reported in MultiQC. Empty = keep everything.
+mito_name: mitochondrion_genome
+
+# Maximum fragment length for bowtie2 -X (ATAC fragments span several nucleosomes)
+bowtie_maxins: 2000
+
+# Minimum mapping quality; a pair is kept only if both mates reach it
+min_mapq: 30
+
+# MACS2 p-value cutoff (-p) for peaks called on fragments (BAMPE, --nomodel)
+macs2_pvalue: 0.001
+
+# Also write broad peaks instead of narrow peaks
+macs2_broad: false
+
+# --- optional -----------------------------------------------------------
+# Reuse an existing bowtie2 index (prefix, i.e. path without ".1.bt2").
+# Requires genome_size as well.
+# bowtie_index: /path/to/index/genome
+# Effective genome size for MACS2 (number of non-N bases). If unset, it is
+# counted from the downloaded FASTA.
+# genome_size: 142573017
+# Test mode: only dump the first N spots of every SRA run (0 = all reads)
+max_spots: 0
