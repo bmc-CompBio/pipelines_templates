@@ -1,120 +1,71 @@
 configfile: "config.yaml"
 
 import pandas as pd
-import re
 
-# ── Load & validate sample sheet ──────────────────────────────────────────────
-REQUIRED_COLS = {"Run", "GEO_Accession (exp)", "chip_antibody", "treatment"}
+sample_table = pd.read_table("SraRunTable.csv", sep=",")
+samples = list(sample_table['Sample Name'].unique())
 
-sample_table = pd.read_csv("SraRunTable.csv")
+pc_table = pd.read_table("peakcall_map.txt", sep="\t")
+PC = list(pc_table['name'])
 
-missing = REQUIRED_COLS - set(sample_table.columns)
-if missing:
-    raise ValueError(f"SraRunTable.csv is missing required columns: {missing}")
+MACS2_BROAD = config.get('macs2_broad', False)
+FRAGMENT_LENGTH = int(config.get('fragment_length', 200))
+MACS2_PVALUE = config.get('macs2_pvalue', 0.01)
+macs2_peak_suffix = "broadPeak" if MACS2_BROAD else "narrowPeak"
 
-# ── Sample mappings ────────────────────────────────────────────────────────────
-# Validate: each GEO accession must have unambiguous antibody and treatment
-for geo, grp in sample_table.groupby("GEO_Accession (exp)"):
-    if grp["chip_antibody"].nunique() > 1:
-        raise ValueError(
-            f"GEO accession {geo} maps to multiple chip_antibody values — ambiguous."
-        )
-    if grp["treatment"].nunique() > 1:
-        raise ValueError(
-            f"GEO accession {geo} maps to multiple treatment values — ambiguous."
-        )
+# optional: reuse an existing bowtie2 index / known genome size
+USER_INDEX = config.get('bowtie_index')
+INDEX_PREFIX = USER_INDEX if USER_INDEX else "bowtie_index/genome"
+INDEX_FLAG = (USER_INDEX + ".1.bt2") if USER_INDEX else "bowtie_index/genome.done"
+USER_GSIZE = config.get('genome_size')
+MAX_SPOTS = int(config.get('max_spots', 0))
 
-# GEO accession -> list of SRR runs (handles multiple runs per sample)
-geo_to_runs = (
-    sample_table.groupby("GEO_Accession (exp)")["Run"]
-    .apply(list)
-    .to_dict()
-)
+def runs_of(sn):
+    return list(sample_table[sample_table['Sample Name'] == sn].Run)
 
-samples = list(geo_to_runs.keys())
+# compute nodes have no internet
+localrules: all, prefetch, getGenomeFasta
 
-# ── Target extraction ──────────────────────────────────────────────────────────
-def antibody_to_target(antibody):
-    """First whitespace-separated token, sanitized for filesystem use."""
-    token = antibody.strip().split()[0]
-    return re.sub(r"[^A-Za-z0-9_\-]", "_", token)
-
-# Per-GEO metadata (one row per accession)
-geo_meta = (
-    sample_table[["GEO_Accession (exp)", "chip_antibody", "treatment"]]
-    .drop_duplicates("GEO_Accession (exp)")
-    .set_index("GEO_Accession (exp)")
-)
-
-geo_to_target = {
-    geo: antibody_to_target(row["chip_antibody"])
-    for geo, row in geo_meta.iterrows()
-}
-
-# ── Validate and resolve controls ──────────────────────────────────────────────
-# For each target, exactly one "No activation" GEO accession must exist
-targets = set(geo_to_target.values())
-target_to_control = {}
-for target in targets:
-    controls = [
-        geo for geo, t in geo_to_target.items()
-        if t == target and geo_meta.loc[geo, "treatment"] == "No activation"
-    ]
-    if len(controls) == 0:
-        raise ValueError(
-            f"Target '{target}' has no 'No activation' control in SraRunTable.csv."
-        )
-    if len(controls) > 1:
-        raise ValueError(
-            f"Target '{target}' has multiple 'No activation' controls: {controls}. "
-            "Cannot determine a unique control."
-        )
-    target_to_control[target] = controls[0]
-
-# ── Build peak-call comparisons ────────────────────────────────────────────────
-# Pattern: <target>__<experimental_GSM>_vs_<control_GSM>
-# Control rows are skipped (they are only used as input, not called against themselves)
-pc_map = {}  # PC name -> (enriched_geo, control_geo)
-for geo, target in geo_to_target.items():
-    ctrl = target_to_control[target]
-    if geo == ctrl:
-        continue
-    pc_name = re.sub(r"[^A-Za-z0-9_\-]", "_", f"{target}__{geo}_vs_{ctrl}")
-    pc_map[pc_name] = (geo, ctrl)
-
-PC = list(pc_map.keys())
-
-# ── Rules ──────────────────────────────────────────────────────────────────────
-
-localrules: prefetch, getGenomeFasta
 
 rule all:
     input:
-        expand("peak_calls/{PC}.bed", PC=PC),
-        expand("{SN}_out/{SN}_coverage.bw", SN=samples)
+        expand("peak_calls/{PC}_peaks." + macs2_peak_suffix, PC=PC),
+        expand("{SN}_out/{SN}_ranges.rds", SN=samples),
+        expand("{SN}_out/{SN}_coverage.bw", SN=samples),
+        "qc/multiqc_report.html"
 
 
 rule macs2:
     input:
-        IP=lambda wildcards: "{}_out/{}.bam".format(pc_map[wildcards.PC][0], pc_map[wildcards.PC][0]),
-        ctrl=lambda wildcards: "{}_out/{}.bam".format(pc_map[wildcards.PC][1], pc_map[wildcards.PC][1])
+        IP=lambda wc: expand("{IP}_out/{IP}.bam",
+            IP=pc_table[pc_table['name'] == wc.PC].enriched.tolist()),
+        control=lambda wc: expand("{ctrl}_out/{ctrl}.bam",
+            ctrl=pc_table[pc_table['name'] == wc.PC].control.tolist()),
+        gsize=lambda wc: [] if USER_GSIZE else "genome_size.txt"
     output:
-        "peak_calls/{PC}.bed"
+        "peak_calls/{PC}_peaks." + macs2_peak_suffix
     params:
-        enr=lambda wildcards: pc_map[wildcards.PC][0],
-        ref=lambda wildcards: pc_map[wildcards.PC][1]
+        gsize=lambda wc, input: str(USER_GSIZE) if USER_GSIZE else open(input.gsize).read().strip(),
+        extsize=FRAGMENT_LENGTH if FRAGMENT_LENGTH > 0 else 200,
+        pvalue=MACS2_PVALUE,
+        broad_flag="--broad" if MACS2_BROAD else ""
+    log:
+        "peak_calls/{PC}_macs2.log"
+    resources:
+        mem_mb=16000
     shell:
         """
-        mkdir -p peak_calls
         macs2 callpeak \
             -t {input.IP} \
-            -c {input.ctrl} \
-            -f BAM -g hs \
-            --nomodel --extsize 200 \
-            -p 0.01 \
+            -c {input.control} \
+            -f BAM \
+            -g {params.gsize} \
+            --nomodel --extsize {params.extsize} \
+            -p {params.pvalue} \
+            --outdir peak_calls \
             -n {wildcards.PC} \
-            --outdir peak_calls/
-        cut -f1-6 peak_calls/{wildcards.PC}_peaks.narrowPeak > {output}
+            {params.broad_flag} \
+            2> {log}
         """
 
 
@@ -122,45 +73,87 @@ rule bam2rangeAndcoverage:
     input:
         "{SN}_out/{SN}.bam"
     output:
-        "{SN}_out/{SN}_coverage.bw"
+        rds="{SN}_out/{SN}_ranges.rds",
+        bw="{SN}_out/{SN}_coverage.bw"
+    params:
+        fragment_length=FRAGMENT_LENGTH
+    resources:
+        mem_mb=16000
     shell:
-        """
-        Rscript --vanilla scripts/BAM2coverage.R {input}
-        """
+        "Rscript --vanilla scripts/bam2coverage.R {input} {params.fragment_length} {output.rds} {output.bw}"
 
 
+# unique reads only: reads with a bowtie2 XS:i tag (second-best alignment) are
+# dropped; duplicates are removed. Runs of one sample are merged. The final
+# BAM is coordinate-sorted and indexed.
 rule bowtie:
     input:
-        mate1=lambda wildcards: expand("raw/{SRR}.fastq.gz", SRR=geo_to_runs[wildcards.SN]),
-        index="bowtie_index/genome.1.bt2"
+        reads=lambda wc: expand("raw/{run}.fastq.gz", run=runs_of(wc.SN)),
+        index=INDEX_FLAG
     params:
-        files1=lambda wildcards: ",".join(
-            expand("raw/{SRR}.fastq.gz", SRR=geo_to_runs[wildcards.SN])
-        )
+        reads=lambda wc: ",".join(expand("raw/{run}.fastq.gz", run=runs_of(wc.SN))),
+        index=INDEX_PREFIX
     output:
-        "{SN}_out/{SN}.bam"
-    threads:
-        34
+        bam="{SN}_out/{SN}.bam",
+        bai="{SN}_out/{SN}.bam.bai"
+    log:
+        align="{SN}_out/alignstats.txt",
+        markdup="{SN}_out/markdup_stats.txt"
+    threads: 16
+    resources:
+        mem_mb=32000
     shell:
         """
-        mkdir -p {wildcards.SN}_out
-        bowtie_opts="-p {threads} --no-unal"
-        bowtie2 $bowtie_opts -x bowtie_index/genome -U {params.files1} > {wildcards.SN}_out/aligned.sam
-        grep -E "@|NM:" {wildcards.SN}_out/aligned.sam | grep -v "XS:" | samtools view -b -o {wildcards.SN}_out/aligned.bam
-        samtools sort -m 2G -@ {threads} -o {wildcards.SN}_out/sorted.bam {wildcards.SN}_out/aligned.bam
-        samtools markdup -r --mode s -@ {threads} {wildcards.SN}_out/sorted.bam {output}
-        rm {wildcards.SN}_out/aligned.sam {wildcards.SN}_out/aligned.bam {wildcards.SN}_out/sorted.bam
+        bowtie2 -p {threads} --no-unal -x {params.index} -U {params.reads} 2> {log.align} | \
+            awk -F'\\t' '/^@/ {{print; next}} {{for (i = 12; i <= NF; i++) if ($i ~ /^XS:i:/) next; print}}' | \
+            samtools sort -u -m 2G -@ 4 -T {wildcards.SN}_out/tmp_cs - | \
+            samtools markdup -r -@ 4 -f {log.markdup} - {output.bam}
+        samtools index -@ {threads} {output.bam}
         """
+
+
+rule bam_qc:
+    input:
+        "{SN}_out/{SN}.bam"
+    output:
+        flagstat="{SN}_out/{SN}.flagstat",
+        stats="{SN}_out/{SN}.stats"
+    threads: 2
+    resources:
+        mem_mb=2000
+    shell:
+        """
+        samtools flagstat -@ {threads} {input} > {output.flagstat}
+        samtools stats -@ {threads} {input} > {output.stats}
+        """
+
+
+rule multiqc:
+    input:
+        expand("{SN}_out/alignstats.txt", SN=samples),
+        expand("{SN}_out/{SN}.flagstat", SN=samples),
+        expand("{SN}_out/{SN}.stats", SN=samples)
+    output:
+        "qc/multiqc_report.html"
+    resources:
+        mem_mb=4000
+    shell:
+        "multiqc -f -q -n multiqc_report.html -o qc {input}"
 
 
 rule fastq_dump:
     input:
         "sra/{SRR}/{SRR}.sra"
     output:
-        "raw/{SRR}.fastq.gz"
+        temp("raw/{SRR}.fastq.gz")
+    params:
+        spots=f"-X {MAX_SPOTS}" if MAX_SPOTS > 0 else ""
+    resources:
+        mem_mb=2000
     shell:
         """
-        fastq-dump --gzip {input} --outdir raw
+        fastq-dump --gzip {params.spots} {input} --outdir raw
+        rm -rf sra/{wildcards.SRR}
         """
 
 
@@ -175,21 +168,35 @@ rule getGenomeFasta:
     params:
         genomeLocation=config['genomeFTP']
     output:
-        "genome.fa"
+        temp("genome.fa")
     shell:
         """
-        wget -O genome.fa.gz {params.genomeLocation}
-        gunzip genome.fa.gz
+        wget -q -O genome.fa.gz {params.genomeLocation}
+        gunzip -f genome.fa.gz
         """
+
+
+# effective genome size = number of A/C/G/T bases
+rule get_genome_size:
+    input:
+        "genome.fa"
+    output:
+        "genome_size.txt"
+    shell:
+        "grep -v '>' {input} | tr -cd 'ACGTacgt' | wc -c > {output}"
 
 
 rule index_bowtie:
     input:
         "genome.fa"
     output:
-        "bowtie_index/genome.1.bt2"
-    threads: 8
+        "bowtie_index/genome.done"
+    threads: 16
+    resources:
+        mem_mb=32000
     shell:
         """
+        mkdir -p bowtie_index
         bowtie2-build --threads {threads} {input} bowtie_index/genome
+        touch {output}
         """
