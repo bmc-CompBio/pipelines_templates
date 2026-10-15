@@ -6,31 +6,46 @@ sample_table = pd.read_table("SraRunTable.csv", sep=",")
 samples = list(sample_table['Sample Name'].unique())
 
 pc_table = pd.read_table("peakcall_map.txt", sep="\t")
-PC = pc_table['name']
+PC = list(pc_table['name'])
 
 macs2_peak_suffix = "broadPeak" if config.get('macs2_broad', False) else "narrowPeak"
 
-localrules: prefetch, getGenomeFasta
+# optional: reuse an existing bowtie2 index / known genome size
+USER_INDEX = config.get('bowtie_index')
+INDEX_PREFIX = USER_INDEX if USER_INDEX else "bowtie_index/genome"
+INDEX_FLAG = (USER_INDEX + ".1.bt2") if USER_INDEX else "bowtie_index/genome.done"
+USER_GSIZE = config.get('genome_size')
+MAX_SPOTS = int(config.get('max_spots', 0))
+
+def runs_of(sn):
+    return list(sample_table[sample_table['Sample Name'] == sn].Run)
+
+# compute nodes have no internet
+localrules: all, prefetch, getGenomeFasta
+
 
 rule all:
     input:
         expand("peak_calls/{PC}_peaks." + macs2_peak_suffix, PC=PC),
         expand("{SN}_out/{SN}_ranges.rds", SN=samples),
-        expand("{SN}_out/{SN}_coverage.bw", SN=samples)
+        expand("{SN}_out/{SN}_coverage.bw", SN=samples),
+        "qc/multiqc_report.html"
 
 
 rule macs2:
     input:
-        IP=lambda wildcards: expand("{IP}_out/{IP}.bam",
-            IP=pc_table[pc_table['name']==wildcards.PC].enriched.tolist()),
-        control=lambda wildcards: expand("{ctrl}_out/{ctrl}.bam",
-            ctrl=pc_table[pc_table['name']==wildcards.PC].control.tolist()),
-        gsize="genome_size.txt"
+        IP=lambda wc: expand("{IP}_out/{IP}.bam",
+            IP=pc_table[pc_table['name'] == wc.PC].enriched.tolist()),
+        control=lambda wc: expand("{ctrl}_out/{ctrl}.bam",
+            ctrl=pc_table[pc_table['name'] == wc.PC].control.tolist()),
+        gsize=lambda wc: [] if USER_GSIZE else "genome_size.txt"
     output:
         "peak_calls/{PC}_peaks." + macs2_peak_suffix
     params:
-        gsize=lambda wildcards, input: open(input.gsize).read().strip(),
+        gsize=lambda wc, input: str(USER_GSIZE) if USER_GSIZE else open(input.gsize).read().strip(),
         broad_flag="--broad" if config.get('macs2_broad', False) else ""
+    log:
+        "peak_calls/{PC}_macs2.log"
     resources:
         mem_mb=16000
     shell:
@@ -43,7 +58,24 @@ rule macs2:
             -n {wildcards.PC} \
             -g {params.gsize} \
             {params.broad_flag} \
-            2> peak_calls/{wildcards.PC}_macs2.log
+            2> {log}
+        """
+
+
+# Fragments (chrom, start, end) from proper pairs: the upstream mate of each
+# pair has TLEN > 0, so no name-sorting / bamToBed is needed.
+rule bam_to_fragments:
+    input:
+        "{SN}_out/{SN}.bam"
+    output:
+        temp("{SN}_out/{SN}.bed")
+    threads: 2
+    resources:
+        mem_mb=2000
+    shell:
+        """
+        samtools view -@ {threads} -f 0x2 {input} | \
+            awk -v OFS='\t' '$9 > 0 {{print $3, $4 - 1, $4 - 1 + $9}}' > {output}
         """
 
 
@@ -51,50 +83,74 @@ rule bed2rangeAndcoverage:
     input:
         "{SN}_out/{SN}.bed"
     output:
-        "{SN}_out/{SN}_ranges.rds",
-        "{SN}_out/{SN}_coverage.bw"
+        rds="{SN}_out/{SN}_ranges.rds",
+        bw="{SN}_out/{SN}_coverage.bw"
     resources:
-        mem_mb=128000
+        mem_mb=24000
     shell:
-        """
-        Rscript --vanilla scripts/bed2rAc.R {input}
-        """
+        "Rscript --vanilla scripts/bed2rAc.R {input} {output.rds} {output.bw}"
 
 
 rule bowtie:
     input:
-        mate1=lambda wildcards: expand("raw/{sample}_1.fastq.gz",
-            sample=list(sample_table[sample_table['Sample Name']==wildcards.SN].Run)),
-        mate2=lambda wildcards: expand("raw/{sample}_2.fastq.gz",
-            sample=list(sample_table[sample_table['Sample Name']==wildcards.SN].Run)),
-        index="bowtie_index/genome.done"
+        mate1=lambda wc: expand("raw/{run}_1.fastq.gz", run=runs_of(wc.SN)),
+        mate2=lambda wc: expand("raw/{run}_2.fastq.gz", run=runs_of(wc.SN)),
+        index=INDEX_FLAG
     params:
-        mate1=lambda wildcards: ",".join(expand("raw/{sample}_1.fastq.gz",
-            sample=list(sample_table[sample_table['Sample Name']==wildcards.SN].Run))),
-        mate2=lambda wildcards: ",".join(expand("raw/{sample}_2.fastq.gz",
-            sample=list(sample_table[sample_table['Sample Name']==wildcards.SN].Run)))
+        mate1=lambda wc: ",".join(expand("raw/{run}_1.fastq.gz", run=runs_of(wc.SN))),
+        mate2=lambda wc: ",".join(expand("raw/{run}_2.fastq.gz", run=runs_of(wc.SN))),
+        index=INDEX_PREFIX
     output:
-        bed=temp("{SN}_out/{SN}.bed"),
-        bam="{SN}_out/{SN}.bam"
-    threads: 34
+        bam="{SN}_out/{SN}.bam",
+        bai="{SN}_out/{SN}.bam.bai"
+    log:
+        align="{SN}_out/alignstats.txt",
+        markdup="{SN}_out/markdup_stats.txt"
+    threads: 16
     resources:
-        mem_mb=250000
+        mem_mb=48000
     shell:
         """
+        # proper pairs -> name sort -> fixmate -> coordinate sort -> drop duplicates
+        # (uncompressed BAM between the pipe stages); final BAM is coordinate-sorted
         bowtie2 -p {threads} -X 1000 --no-discordant --no-mixed --no-unal \
-            -x bowtie_index/genome \
-            -1 {params.mate1} -2 {params.mate2} \
-            2> {wildcards.SN}_out/alignstats.txt | \
-            samtools view -b -f 0x2 | \
-            samtools sort -n -m 2G -@ {threads} -T {wildcards.SN}_out/tmp_ns1 | \
-            samtools fixmate -m -@ {threads} - - | \
-            samtools sort -m 2G -@ {threads} -T {wildcards.SN}_out/tmp_cs | \
-            samtools markdup -r -@ {threads} - - \
-                2> {wildcards.SN}_out/markdup_stats.txt | \
-            samtools sort -n -m 2G -@ {threads} -T {wildcards.SN}_out/tmp_ns2 \
-                -o {output.bam}
-        bamToBed -i {output.bam} -bedpe 2>/dev/null | cut -f 1,2,6 > {output.bed}
+            -x {params.index} -1 {params.mate1} -2 {params.mate2} 2> {log.align} | \
+            samtools view -u -f 0x2 | \
+            samtools sort -u -n -m 2G -@ 4 -T {wildcards.SN}_out/tmp_ns | \
+            samtools fixmate -u -m -@ 4 - - | \
+            samtools sort -u -m 2G -@ 4 -T {wildcards.SN}_out/tmp_cs | \
+            samtools markdup -r -@ 4 -f {log.markdup} - {output.bam}
+        samtools index -@ {threads} {output.bam}
         """
+
+
+rule bam_qc:
+    input:
+        "{SN}_out/{SN}.bam"
+    output:
+        flagstat="{SN}_out/{SN}.flagstat",
+        stats="{SN}_out/{SN}.stats"
+    threads: 2
+    resources:
+        mem_mb=2000
+    shell:
+        """
+        samtools flagstat -@ {threads} {input} > {output.flagstat}
+        samtools stats -@ {threads} {input} > {output.stats}
+        """
+
+
+rule multiqc:
+    input:
+        expand("{SN}_out/alignstats.txt", SN=samples),
+        expand("{SN}_out/{SN}.flagstat", SN=samples),
+        expand("{SN}_out/{SN}.stats", SN=samples)
+    output:
+        "qc/multiqc_report.html"
+    resources:
+        mem_mb=4000
+    shell:
+        "multiqc -f -q -n multiqc_report.html -o qc {input}"
 
 
 rule fastq_dump:
@@ -103,9 +159,13 @@ rule fastq_dump:
     output:
         temp("raw/{SRR}_1.fastq.gz"),
         temp("raw/{SRR}_2.fastq.gz")
+    params:
+        spots=f"-X {MAX_SPOTS}" if MAX_SPOTS > 0 else ""
+    resources:
+        mem_mb=2000
     shell:
         """
-        fastq-dump --split-3 --gzip {input} --outdir raw
+        fastq-dump --split-3 --gzip {params.spots} {input} --outdir raw
         rm -rf sra/{wildcards.SRR}
         """
 
@@ -125,17 +185,18 @@ rule getGenomeFasta:
     shell:
         """
         wget -q -O genome.fa.gz {params.genomeLocation}
-        gunzip genome.fa.gz
+        gunzip -f genome.fa.gz
         """
 
 
+# effective genome size = number of A/C/G/T bases
 rule get_genome_size:
     input:
         "genome.fa"
     output:
         "genome_size.txt"
     shell:
-        "python scripts/get_genome_size.py {input} > {output}"
+        "grep -v '>' {input} | tr -cd 'ACGTacgt' | wc -c > {output}"
 
 
 rule index_bowtie:
@@ -143,11 +204,12 @@ rule index_bowtie:
         "genome.fa"
     output:
         "bowtie_index/genome.done"
-    threads: 8
+    threads: 16
     resources:
-        mem_mb=50000
+        mem_mb=32000
     shell:
         """
+        mkdir -p bowtie_index
         bowtie2-build --threads {threads} {input} bowtie_index/genome
         touch {output}
         """

@@ -1,5 +1,16 @@
+# Reference genome (gzipped FASTA, downloaded on the login node)
 genomeFTP: https://ftp.ensembl.org/pub/release-115/fasta/mus_musculus/dna/Mus_musculus.GRCm39.dna.toplevel.fa.gz
 
-# Set to true for broad histone marks (H3K27me3, H3K9me3, etc.)
-# Set to false (default) for transcription factors and sharp marks (H3K27ac, H3K4me3, etc.)
+# Set to true for broad histone marks (H3K27me3, H3K9me3, ...)
+# Set to false for transcription factors and sharp marks (H3K27ac, H3K4me3, ...)
 macs2_broad: false
+
+# --- optional -----------------------------------------------------------
+# Reuse an existing bowtie2 index instead of downloading + building one
+# (prefix, i.e. the path without ".1.bt2"). Requires genome_size as well.
+# bowtie_index: /path/to/index/genome
+# Effective genome size for MACS2 (number of non-N bases). If unset, it is
+# counted from the downloaded FASTA.
+# genome_size: 2654621783
+# Test mode: only dump the first N spots of every SRA run (0 = all reads)
+max_spots: 0

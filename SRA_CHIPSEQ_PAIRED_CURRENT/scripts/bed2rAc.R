@@ -1,13 +1,10 @@
 #!/usr/bin/env Rscript
-
+# Usage: bed2rAc.R <fragments.bed> <ranges.rds> <coverage.bw>
 suppressWarnings(suppressMessages(library(rtracklayer)))
 
+args <- commandArgs(trailingOnly = TRUE)
+if (length(args) != 3) stop("Usage: bed2rAc.R <in.bed> <out.rds> <out.bw>")
 
-args <- commandArgs(trailingOnly=TRUE)
-file.id <- args[1]
-
-bedR <- import.bed(file.id)
-file.id <- strsplit(file.id,"\\.")[[1]][1]
-saveRDS(bedR, file=paste(file.id,"_ranges.rds", sep=""))
-cov <- coverage(bedR)
-export.bw(cov, paste(file.id,"_coverage.bw", sep=""))
+bedR <- import.bed(args[1])
+saveRDS(bedR, file = args[2])
+export.bw(coverage(bedR), args[3])
