@@ -1,0 +1,29 @@
+# Large data directories — not tracked by git
+raw/
+sra/
+*_out/
+peak_calls/
+bowtie_index/
+tags/
+logs/
+
+# Generated files
+genome.fa
+genome.fa.gz
+genome_size.txt
+dag.svg
+*.bam
+*.bai
+*.sam
+*.fastq
+*.fastq.gz
+
+# Snakemake internals
+.snakemake/
+__pycache__/
+
+# macOS
+.DS_Store
+
+# Homer local install
+homer/

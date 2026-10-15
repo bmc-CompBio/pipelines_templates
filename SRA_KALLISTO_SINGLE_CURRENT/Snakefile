@@ -1,0 +1,181 @@
+# Snakefile (single-end RNA-seq)
+
+configfile: "config.yaml"
+
+import pandas as pd
+
+sample_table = pd.read_table(config["runtable"], sep=",")
+samples = list(sample_table['Sample Name'].unique())
+first_run = sample_table.iloc[0]['Run']
+
+# parameters for single-end libraries
+FRAG_MEAN = config.get("frag_mean", 200)
+FRAG_SD   = config.get("frag_sd", 20)
+
+# everything that needs network connection
+localrules: prefetch, get_index_files, create_se
+
+rule all:
+    input:
+        "se.rds"
+        # "stranded.out"
+
+rule create_se:
+    input:
+        expand("{SRS}_out/{SRS}.abundance.tsv", SRS=samples),
+        "genome.gtf.gz"
+    output:
+        "se.rds"
+    script:
+        "scripts/toSe.R"
+
+rule kallisto:
+    input:
+        files=lambda wc: expand(
+            "raw/{sample}.fastq.gz",
+            sample=list(sample_table[sample_table['Sample Name'] == wc.SRS].Run)
+        ),
+        gtf="genome.gtf.gz",
+        index="kallisto_index/genome",
+        strandedness="results/strandedness.txt"
+    output:
+        "{SRS}_out/{SRS}.abundance.h5",
+        "{SRS}_out/{SRS}.abundance.tsv"
+    threads: 32
+    resources:
+        mem_mb=10000
+    params:
+        frag_mean=FRAG_MEAN,
+        frag_sd=FRAG_SD
+    shell:
+        r"""
+        strandedness=$(cat {input.strandedness})
+        if [ "$strandedness" = "reverse" ]; then
+            strand_flag="--rf-stranded"
+        elif [ "$strandedness" = "forward" ]; then
+            strand_flag="--fr-stranded"
+        else
+            strand_flag=""
+        fi
+        kallisto quant \
+            --index={input.index} \
+            --gtf {input.gtf} \
+            --output-dir={wildcards.SRS}_out \
+            --threads={threads} \
+            --single -l {params.frag_mean} -s {params.frag_sd} \
+            $strand_flag \
+            {input.files}
+        mv {wildcards.SRS}_out/abundance.h5  {wildcards.SRS}_out/{wildcards.SRS}.abundance.h5
+        mv {wildcards.SRS}_out/abundance.tsv {wildcards.SRS}_out/{wildcards.SRS}.abundance.tsv
+        """
+
+rule subset_reads:
+    input:
+        f1=f"raw/{first_run}.fastq.gz"
+    output:
+        subset="subsets/salmon_subset.fastq.gz"
+    shell:
+        r"""
+        mkdir -p subsets
+        gzip -dc {input.f1} | head -n 400000 | gzip > {output.subset} || true
+        """
+
+rule salmon_index:
+    input:
+        txt="transcripts.fa.gz"
+    output:
+        directory("salmon_index")
+    threads: 32
+    resources:
+        mem_mb=128000
+    shell:
+        r"""
+        salmon index -t {input.txt} -i {output}
+        """
+
+rule salmon_alignment:
+    input:
+        reads="subsets/salmon_subset.fastq.gz",
+        index=rules.salmon_index.output
+    output:
+        "salmon_quant/aux_info/meta_info.json"
+    threads: 32
+    resources:
+        mem_mb=32000
+    params:
+        frag_mean=FRAG_MEAN,
+        frag_sd=FRAG_SD
+    shell:
+        r"""
+        salmon quant \
+            --index={input.index} \
+            --libType A \
+            -r {input.reads} \
+            --fldMean {params.frag_mean} --fldSD {params.frag_sd} \
+            --output salmon_quant
+        rm -rf salmon_index
+        """
+
+rule determine_strandedness:
+    input:
+        json="salmon_quant/aux_info/meta_info.json"
+    output:
+        strandedness="results/strandedness.txt"
+    script:
+        "scripts/determine_strandedness.py"
+
+rule fastq_dump:
+    input:
+        "sra/{SRR}/{SRR}.sra"
+    output:
+        "raw/{SRR}.fastq.gz"
+    shell:
+        r"""
+        mkdir -p raw
+        # For single-end, fastq-dump produces a single FASTQ
+        fastq-dump --gzip {input} --outdir raw
+        """
+
+rule prefetch:
+    output:
+        "sra/{SRR}/{SRR}.sra"
+    shell:
+        "prefetch -O sra {wildcards.SRR}"
+
+rule kallisto_index:
+    input:
+        "transcripts.fa.gz"
+    output:
+        temp("kallisto_index/genome")
+    resources:
+        mem_mb=10000
+    shell:
+        r"""
+        kallisto index --index={output} {input}
+        """
+
+rule get_index_files:
+    params:
+        gtfLocation=config['gtfFTP'],
+        transcriptLocation=config['transcriptsFTP'],
+        ncrnaLocation=config.get('ncrnaFTP', '')
+    output:
+        "genome.gtf.gz",
+        "transcripts.fa.gz"
+    shell:
+        r"""
+        wget -O genome.gtf.gz {params.gtfLocation}
+        wget -O transcripts.fa.gz {params.transcriptLocation}
+        gunzip transcripts.fa.gz
+        # strip GENCODE pipe-delimited headers to transcript IDs (no-op for Ensembl)
+        awk -F '|' '{{print $1}}' transcripts.fa > transcripts_edited.fa
+        mv transcripts_edited.fa transcripts.fa
+        # append ncRNA sequences if ncrnaFTP is set
+        if [ -n "{params.ncrnaLocation}" ]; then
+            wget -O ncrna.fa.gz {params.ncrnaLocation}
+            gunzip ncrna.fa.gz
+            cat ncrna.fa >> transcripts.fa
+            rm ncrna.fa
+        fi
+        gzip transcripts.fa
+        """

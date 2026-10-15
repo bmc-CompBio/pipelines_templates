@@ -1,0 +1,9 @@
+runtable: SraRunTable.csv
+gtfFTP: https://ftp.ensembl.org/pub/release-115/gtf/drosophila_melanogaster/Drosophila_melanogaster.BDGP6.54.115.gtf.gz
+transcriptsFTP: https://ftp.ensembl.org/pub/release-115/fasta/drosophila_melanogaster/cdna/Drosophila_melanogaster.BDGP6.54.cdna.all.fa.gz
+ncrnaFTP: https://ftp.ensembl.org/pub/release-115/fasta/drosophila_melanogaster/ncrna/Drosophila_melanogaster.BDGP6.54.ncrna.fa.gz
+strandedness: none
+organism: drosophila
+annotationVersion: 115
+frag_mean: 180        # mean fragment length (~250bp size-selected, ~180bp effective insert)
+frag_sd: 30           # fragment length SD

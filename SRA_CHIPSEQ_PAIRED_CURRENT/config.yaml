@@ -1,0 +1,5 @@
+genomeFTP: https://ftp.ensembl.org/pub/release-115/fasta/mus_musculus/dna/Mus_musculus.GRCm39.dna.toplevel.fa.gz
+
+# Set to true for broad histone marks (H3K27me3, H3K9me3, etc.)
+# Set to false (default) for transcription factors and sharp marks (H3K27ac, H3K4me3, etc.)
+macs2_broad: false
