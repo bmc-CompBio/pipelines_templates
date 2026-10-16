@@ -43,7 +43,7 @@ snakemake --cores 16                  # local machine (needs internet)
 snakemake --profile profile/          # SLURM, see below
 ```
 
-### On the LMU cluster
+### On the BMC cluster
 
 `profile/config.yaml` submits every rule through `sbatch` (cluster-generic executor). `prefetch` and the genome download are `localrules` and run on the login node because compute nodes have no internet. Threads and memory are set in the Snakefile, wall time in the profile.
 

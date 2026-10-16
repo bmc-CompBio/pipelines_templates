@@ -1,6 +1,6 @@
 ---
 name: cluster-execution
-description: Transfer a local Snakemake project to the LMU bioinformatics cluster (<cluster-login-host>), execute it via SLURM, retrieve output directories inferred from rule all, and clean up on success. Use when running computationally intensive Snakemake workflows that need cluster resources.
+description: Transfer a local Snakemake project to the BMC bioinformatics cluster (<cluster-login-host>), execute it via SLURM, retrieve output directories inferred from rule all, and clean up on success. Use when running computationally intensive Snakemake workflows that need cluster resources.
 ---
 
 # Cluster Execution
@@ -8,7 +8,7 @@ description: Transfer a local Snakemake project to the LMU bioinformatics cluste
 > **Sanitized copy.** User name, login host and personal paths are replaced by placeholders: `<user>` (cluster account), `<cluster-login-host>` (login node), `<gpu-node>`, `<path-to>`. Replace them with your own values before using this file as a Claude Code skill (see the repository README).
 
 
-Transfers a local Snakemake project to the LMU cluster, runs it under SLURM via snakemake-executor-plugin-cluster-generic, retrieves the output directories defined by `rule all`, and removes the project from the cluster on success. On failure, leaves everything intact for debugging.
+Transfers a local Snakemake project to the BMC cluster, runs it under SLURM via snakemake-executor-plugin-cluster-generic, retrieves the output directories defined by `rule all`, and removes the project from the cluster on success. On failure, leaves everything intact for debugging.
 
 ## Cluster Details
 

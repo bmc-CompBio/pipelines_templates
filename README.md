@@ -4,14 +4,14 @@ Snakemake pipelines used directly or as templates. Each folder is self-contained
 
 | Pipeline | Description | Status |
 |---|---|---|
-| [`SRA_CHIPSEQ_PAIRED_CURRENT`](SRA_CHIPSEQ_PAIRED_CURRENT/) | Paired-end ChIP-seq from SRA: bowtie2, dedup, MACS2, coverage, MultiQC | modernized, tested on the LMU cluster |
-| [`SRA_CHIPSEQ_SINGLE_CURRENT`](SRA_CHIPSEQ_SINGLE_CURRENT/) | Single-end ChIP-seq from SRA: unique reads, MACS2, fragment-extended coverage (`fragment_length` in config), MultiQC | modernized, tested on the LMU cluster |
-| [`SRA_ATAC_PAIRED_CURRENT`](SRA_ATAC_PAIRED_CURRENT/) | Paired-end ATAC-seq from SRA: fastp, bowtie2, MAPQ/dedup/mito filtering, MACS2, coverage, MultiQC | modernized, tested on the LMU cluster |
+| [`SRA_CHIPSEQ_PAIRED_CURRENT`](SRA_CHIPSEQ_PAIRED_CURRENT/) | Paired-end ChIP-seq from SRA: bowtie2, dedup, MACS2, coverage, MultiQC | modernized, tested on the BMC cluster |
+| [`SRA_CHIPSEQ_SINGLE_CURRENT`](SRA_CHIPSEQ_SINGLE_CURRENT/) | Single-end ChIP-seq from SRA: unique reads, MACS2, fragment-extended coverage (`fragment_length` in config), MultiQC | modernized, tested on the BMC cluster |
+| [`SRA_ATAC_PAIRED_CURRENT`](SRA_ATAC_PAIRED_CURRENT/) | Paired-end ATAC-seq from SRA: fastp, bowtie2, MAPQ/dedup/mito filtering, MACS2, coverage, MultiQC | modernized, tested on the BMC cluster |
 | `SRA_KALLISTO_SINGLE_CURRENT` | Single-end RNA-seq quantification (kallisto) from SRA | not yet updated |
 
-Modernized pipelines target the LMU SLURM cluster (`profile/` directory, single conda environment per pipeline).
+Modernized pipelines target the BMC SLURM cluster (`profile/` directory, single conda environment per pipeline).
 
-## Running on the LMU cluster
+## Running on the BMC cluster
 
 The pipelines are executed with Claude Code's `cluster-execution` skill: it copies a pipeline folder to the cluster, builds the conda environment, writes/uses the SLURM profile, runs Snakemake, retrieves the files declared in `rule all`, and cleans up on success. A sanitized copy of the skill is in [`docs/cluster-execution.md`](docs/cluster-execution.md).
 
