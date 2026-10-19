@@ -1,0 +1,17 @@
+# data / results
+raw/
+sra/
+*_out/
+qc/
+logs/
+dag.svg
+.snakemake/
+.DS_Store
+subsets/
+results/
+salmon_quant/
+salmon_index/
+kallisto_index/
+transcripts.fa.gz
+genome.gtf.gz
+se.rds
