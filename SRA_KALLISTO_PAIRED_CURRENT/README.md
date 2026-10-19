@@ -1,9 +1,9 @@
 # SRA RNA-seq quantification (paired-end, kallisto)
 
-Snakemake pipeline that takes paired-end RNA-seq runs from NCBI SRA to transcript abundances (kallisto) and a gene-level `SummarizedExperiment` (`se.rds`, via tximport and biomaRt) plus a MultiQC report. It is meant to be copied and adapted: for a new dataset only `config.yaml` and `SraRunTable.csv` change.
+Snakemake pipeline that takes paired-end RNA-seq runs from NCBI SRA to transcript abundances (kallisto) and a gene-level `SummarizedExperiment` (`se.rds`, via tximport and Ensembl annotation) plus a MultiQC report. It is meant to be copied and adapted: for a new dataset only `config.yaml` and `SraRunTable.csv` change.
 
 ```
-prefetch → fastq-dump → kallisto quant (-b 30) → tximport + biomaRt → se.rds
+prefetch → fastq-dump → kallisto quant (-b 30) → tximport + Ensembl annotation → se.rds
                  │             ↑                                   
                  │      strandedness.txt ← salmon on 100k reads (if strandedness: auto)
                  └→ kallisto logs → MultiQC
@@ -13,14 +13,14 @@ prefetch → fastq-dump → kallisto quant (-b 30) → tximport + biomaRt → se
 2. **Annotation** – the Ensembl GTF and cDNA FASTA from `config.yaml` are downloaded on the login node; the kallisto index is built once and removed afterwards.
 3. **Strandedness** – `strandedness: auto` runs salmon (`--libType A`) on the first 100k read pairs of the first run and converts the strand bias to `forward` / `reverse` / `unstranded` for kallisto (`--fr-stranded` / `--rf-stranded` / none). Set `strandedness` to `none`, `forward` or `reverse` to skip salmon and its index.
 4. **Quantify** – `kallisto quant` with 30 bootstraps (`bootstraps`), per sample.
-5. **Summarise** – `scripts/toSe.R` imports the abundances with tximport (transcripts → genes via the GTF), drops genes without counts and adds annotation: gene symbol and biotype are read from the GTF (so they match the chosen release exactly and need no network); entrez id and description are added from biomaRt on a best-effort basis (3 attempts, `biomart_host`, default `https://useast.ensembl.org`; `www.ensembl.org` redirects BioMart requests). If BioMart is unreachable the two columns are `NA` and a warning is printed — the pipeline still finishes. Set `biomart: false` to skip it. `create_se` queries Ensembl and therefore runs on the login node.
+5. **Summarise** – `scripts/toSe.R` imports the abundances with tximport (transcripts → genes via the GTF), drops genes without counts and adds annotation, all from the Ensembl release in `config.yaml` (no BioMart, no network access in this step): gene symbol and biotype from the GTF, entrez id from the Ensembl FTP file `tsv/<species>/<assembly>.<release>.entrez.tsv.gz` (URL derived from `gtfFTP`, or set `entrezFTP`). If a gene maps to several entrez ids, the one shared by most of its transcripts is used; genes without an Ensembl–Entrez link (many lncRNAs, pseudogenes, transposons) get `NA`.
 6. **QC** – MultiQC summarises the kallisto logs (pseudoalignment rate, fragment length).
 
 ## Adapting to a new dataset
 
 | File | What to change |
 |---|---|
-| `config.yaml` | `gtfFTP`, `transcriptsFTP`, `annotationVersion`: Ensembl GTF, cDNA FASTA and release number. `organism`: `human`, `mouse`, `rat`, `drosophila` or `zebrafish` (used for the biomaRt dataset; other species: set `biomart_dataset`). `strandedness`, `bootstraps`. Optional: `biomart`, `biomart_host`, `biomart_dataset`, `max_spots` (test mode). |
+| `config.yaml` | `gtfFTP`, `transcriptsFTP`, `annotationVersion`: Ensembl GTF, cDNA FASTA and release number. `organism`: free-text label stored in the metadata of `se.rds`. `strandedness`, `bootstraps`. Optional: `entrezFTP`, `max_spots` (test mode). |
 | `SraRunTable.csv` | From the NCBI SRA Run Selector ("Metadata"). Needs the columns `Run` and `Sample Name`, `LibraryLayout` must be `PAIRED`. All columns are kept as `colData` of `se.rds`. |
 
 The shipped example is the human RNA-seq study GSE122459 (26 samples, GRCh38, Ensembl 115).
@@ -44,7 +44,7 @@ snakemake --profile profile/          # SLURM, see below
 
 ### On the BMC cluster
 
-`profile/config.yaml` submits every rule through `sbatch` (cluster-generic executor). `prefetch`, the annotation download, `create_se` (biomaRt) and `set_strandedness` are `localrules` and run on the login node. Threads and memory are set in the Snakefile, wall time in the profile.
+`profile/config.yaml` submits every rule through `sbatch` (cluster-generic executor). `prefetch`, the annotation download, `create_se` and `set_strandedness` are `localrules` and run on the login node. Threads and memory are set in the Snakefile, wall time in the profile.
 
 | Rule | Threads | Memory | Time (min) | Partition |
 |---|---|---|---|---|
@@ -65,7 +65,7 @@ Set `max_spots: 2000000` in `config.yaml` (only the first 2 M spots per run are 
 
 | Path | Description |
 |---|---|
-| `se.rds` | `SummarizedExperiment`: assays `counts`, `tpms`, `avgTxLength`; `rowData` gene annotation (id, symbol, entrez, biotype, description); `colData` SRA metadata; `metadata` with annotation sources and strandedness |
+| `se.rds` | `SummarizedExperiment`: assays `counts`, `tpms`, `avgTxLength`; `rowData` gene annotation (id, symbol, entrez, biotype); `colData` SRA metadata; `metadata` with annotation sources and strandedness |
 | `{sample}_out/{sample}.abundance.tsv`, `.abundance.h5` | kallisto transcript abundances (with bootstraps in the `.h5`) |
 | `{sample}_out/{sample}.kallisto.log`, `run_info.json` | kallisto log and run information |
 | `results/strandedness.txt` | Strandedness used for kallisto |
@@ -79,5 +79,5 @@ Raw FASTQs, SRA files, the kallisto and salmon indices and the read subsets are 
 - Samples with several runs are handled correctly: the FASTQ files are passed to kallisto as `r1_run1 r2_run1 r1_run2 r2_run2 …`. Earlier versions passed all read-1 files followed by all read-2 files, which would pair the wrong mates for such samples.
 - Earlier versions named the columns of the count matrices from a `sample.id` column that does not exist in SRA run tables; the matrices are now named by `Sample Name`.
 - The strandedness option in earlier `config.yaml` files was ignored (salmon always ran).
-- During cluster testing Ensembl BioMart was unavailable (timeouts, 503, redirect to the status page), so the entrez/description lookup itself could not be exercised; only its fallback (`NA` columns, pipeline completes) was verified. The rest of the pipeline, including `se.rds`, was tested end to end.
+- Earlier versions queried Ensembl BioMart for entrez id and description. BioMart is being discontinued and was unreliable, so it was replaced by the Ensembl FTP files; the `description` column was dropped.
 - License: MIT (see repository root).

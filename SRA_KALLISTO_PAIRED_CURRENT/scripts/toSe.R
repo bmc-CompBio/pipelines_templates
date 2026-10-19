@@ -1,9 +1,8 @@
 # Build a SummarizedExperiment (counts, TPM, avg. transcript length) from the
-# kallisto abundances with tximport; gene annotation from biomaRt.
+# kallisto abundances with tximport; gene annotation from the Ensembl GTF and FTP mappings.
 suppressPackageStartupMessages({
   library(tximport)
   library(SummarizedExperiment)
-  library(biomaRt)
   library(GenomicFeatures)
 })
 
@@ -45,59 +44,33 @@ rownames(cmat) <- strip.version(rownames(cmat))
 rownames(tmat) <- strip.version(rownames(tmat))
 rownames(avgTxLength) <- strip.version(rownames(avgTxLength))
 
-## gene annotation
-# symbol and biotype come from the GTF (exact for the chosen release, no network);
-# entrez id and description are added from biomaRt when it is reachable
+## gene annotation, all from the Ensembl release given in config.yaml (no network access needed):
+# symbol and biotype from the GTF, entrez id from the Ensembl FTP "entrez" mapping
 gtf.genes <- rtracklayer::import("genome.gtf.gz", feature.type = "gene")
 g <- mcols(gtf.genes)
 gtf.annot <- data.frame(id = g$gene_id,
                         symbol = if (is.null(g$gene_name)) NA else g$gene_name,
                         biotype = if (is.null(g$gene_biotype)) NA else g$gene_biotype)
 m <- match(rownames(cmat), gtf.annot$id)
+
+# EntrezGene rows only ("EntrezGene_trans_name" are name-based guesses); a gene with
+# several entrez ids gets the one that is listed for most of its transcripts
+ez <- read.delim("entrez.tsv.gz", colClasses = "character")
+ez <- ez[ez$db_name == "EntrezGene", c("gene_stable_id", "xref")]
+if (nrow(ez) > 0) {
+  ez <- as.data.frame(table(ez$gene_stable_id, ez$xref), stringsAsFactors = FALSE)
+  ez <- ez[ez$Freq > 0, ]
+  ez <- ez[order(-ez$Freq, as.numeric(ez$Var2)), ]
+  ez <- ez[!duplicated(ez$Var1), ]
+}
+me <- match(rownames(cmat), ez$Var1)
+
 annot <- data.frame(id = rownames(cmat),
                     symbol = gtf.annot$symbol[m],
-                    entrez = NA_integer_,
-                    biotype = gtf.annot$biotype[m],
-                    description = NA_character_)
+                    entrez = as.integer(ez$Var2[me]),
+                    biotype = gtf.annot$biotype[m])
 rownames(annot) <- annot$id
-
-datasets <- c(human = "hsapiens_gene_ensembl", mouse = "mmusculus_gene_ensembl",
-              rat = "rnorvegicus_gene_ensembl", drosophila = "dmelanogaster_gene_ensembl",
-              zebrafish = "drerio_gene_ensembl")
-dataset <- if (!is.null(cfg$biomart_dataset)) cfg$biomart_dataset else datasets[cfg$organism]
-use.biomart <- is.null(cfg$biomart) || isTRUE(cfg$biomart)
-if (use.biomart && (is.null(dataset) || is.na(dataset))) {
-  warning("Unknown organism '", cfg$organism, "': set biomart_dataset in config.yaml; ",
-          "entrez/description left empty")
-  use.biomart <- FALSE
-}
-
-if (use.biomart) {
-  httr::set_config(httr::config(ssl_verifypeer = FALSE))
-  host <- if (is.null(cfg$biomart_host)) "https://useast.ensembl.org" else cfg$biomart_host
-  bm <- NULL
-  for (attempt in 1:3) {
-    bm <- tryCatch({
-      mart <- useMart("ENSEMBL_MART_ENSEMBL", dataset = unname(dataset), host = host)
-      getBM(filters = "ensembl_gene_id",
-            attributes = c("ensembl_gene_id", "entrezgene_id", "description"),
-            values = rownames(cmat), mart = mart)
-    }, error = function(e) {
-      message("biomaRt attempt ", attempt, " failed: ", conditionMessage(e))
-      NULL
-    })
-    if (!is.null(bm)) break
-    Sys.sleep(10)
-  }
-  if (is.null(bm)) {
-    warning("biomaRt not reachable; entrez and description are NA")
-  } else {
-    bm <- bm[!duplicated(bm$ensembl_gene_id), ]
-    mb <- match(rownames(cmat), bm$ensembl_gene_id)
-    annot$entrez <- bm$entrezgene_id[mb]
-    annot$description <- bm$description[mb]
-  }
-}
+message(sum(!is.na(annot$entrez)), " of ", nrow(annot), " genes have an entrez id")
 
 se <- SummarizedExperiment(assays = list(counts = cmat, tpms = tmat, avgTxLength = avgTxLength),
                            colData = samples, rowData = annot)

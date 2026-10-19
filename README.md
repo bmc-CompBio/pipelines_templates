@@ -7,8 +7,8 @@ Snakemake pipelines used directly or as templates. Each folder is self-contained
 | [`SRA_CHIPSEQ_PAIRED_CURRENT`](SRA_CHIPSEQ_PAIRED_CURRENT/) | Paired-end ChIP-seq from SRA: bowtie2, dedup, MACS2, coverage, MultiQC | modernized, tested on the BMC cluster |
 | [`SRA_CHIPSEQ_SINGLE_CURRENT`](SRA_CHIPSEQ_SINGLE_CURRENT/) | Single-end ChIP-seq from SRA: unique reads, MACS2, fragment-extended coverage (`fragment_length` in config), MultiQC | modernized, tested on the BMC cluster |
 | [`SRA_ATAC_PAIRED_CURRENT`](SRA_ATAC_PAIRED_CURRENT/) | Paired-end ATAC-seq from SRA: fastp, bowtie2, MAPQ/dedup/mito filtering, MACS2, coverage, MultiQC | modernized, tested on the BMC cluster |
-| [`SRA_KALLISTO_PAIRED_CURRENT`](SRA_KALLISTO_PAIRED_CURRENT/) | Paired-end RNA-seq from SRA: kallisto, automatic strandedness (salmon), tximport to a SummarizedExperiment, MultiQC | recovered and modernized, tested on the BMC cluster (BioMart annotation not verified, see its README) |
-| [`SRA_KALLISTO_SINGLE_CURRENT`](SRA_KALLISTO_SINGLE_CURRENT/) | Single-end RNA-seq from SRA: kallisto, automatic strandedness (salmon), tximport to a SummarizedExperiment, MultiQC | modernized, tested on the BMC cluster (BioMart annotation not verified, see the paired README) |
+| [`SRA_KALLISTO_PAIRED_CURRENT`](SRA_KALLISTO_PAIRED_CURRENT/) | Paired-end RNA-seq from SRA: kallisto, automatic strandedness (salmon), tximport to a SummarizedExperiment, MultiQC | recovered and modernized, tested on the BMC cluster |
+| [`SRA_KALLISTO_SINGLE_CURRENT`](SRA_KALLISTO_SINGLE_CURRENT/) | Single-end RNA-seq from SRA: kallisto, automatic strandedness (salmon), tximport to a SummarizedExperiment, MultiQC | modernized, tested on the BMC cluster |
 
 Modernized pipelines target the BMC SLURM cluster (`profile/` directory, single conda environment per pipeline).
 

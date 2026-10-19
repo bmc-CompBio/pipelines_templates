@@ -15,7 +15,7 @@ MAX_SPOTS = int(config.get("max_spots", 0))
 def runs_of(srs):
     return list(sample_table[sample_table['Sample Name'] == srs].Run)
 
-# compute nodes have no internet; create_se queries biomaRt
+# compute nodes have no internet; get_index_files downloads the annotation
 localrules: all, prefetch, get_index_files, create_se, set_strandedness
 
 
@@ -28,7 +28,8 @@ rule all:
 rule create_se:
     input:
         expand("{SRS}_out/{SRS}.abundance.tsv", SRS=samples),
-        "genome.gtf.gz"
+        "genome.gtf.gz",
+        "entrez.tsv.gz"
     output:
         "se.rds"
     script:
@@ -181,13 +182,16 @@ rule prefetch:
 rule get_index_files:
     params:
         gtfLocation=config['gtfFTP'],
+        entrezLocation=config.get('entrezFTP') or config['gtfFTP'].replace('/gtf/', '/tsv/').replace('.gtf.gz', '.entrez.tsv.gz'),
         transcriptLocation=config['transcriptsFTP']
     output:
         "genome.gtf.gz",
+        "entrez.tsv.gz",
         "transcripts.fa.gz"
     shell:
         """
         wget -q -O genome.gtf.gz {params.gtfLocation}
+        wget -q -O entrez.tsv.gz {params.entrezLocation}
         # keep only the transcript id of GENCODE-style "id|gene|..." headers
         wget -q -O - {params.transcriptLocation} | gunzip -c | awk -F '|' '{{print $1}}' | gzip > transcripts.fa.gz
         """

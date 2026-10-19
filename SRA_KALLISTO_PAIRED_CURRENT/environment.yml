@@ -13,8 +13,6 @@ dependencies:
   - multiqc
   - r-base
   - r-yaml
-  - r-httr
   - bioconductor-tximport
   - bioconductor-summarizedexperiment
-  - bioconductor-biomart
   - bioconductor-genomicfeatures

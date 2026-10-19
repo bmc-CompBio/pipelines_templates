@@ -5,8 +5,7 @@ gtfFTP: https://ftp.ensembl.org/pub/release-115/gtf/homo_sapiens/Homo_sapiens.GR
 transcriptsFTP: https://ftp.ensembl.org/pub/release-115/fasta/homo_sapiens/cdna/Homo_sapiens.GRCh38.cdna.all.fa.gz
 annotationVersion: 115
 
-# human, mouse, rat, drosophila, zebrafish (used for the biomaRt gene annotation
-# in se.rds; for other species set biomart_dataset below)
+# species label, stored in the metadata of se.rds
 organism: human
 
 # Library strandedness for kallisto:
@@ -20,10 +19,9 @@ strandedness: auto
 bootstraps: 30
 
 # --- optional -----------------------------------------------------------
-# Gene symbol and biotype are read from the GTF. Entrez id and description are
-# added from biomaRt if it is reachable (NA otherwise).
-# biomart: false                           # skip biomaRt completely
-# biomart_dataset: hsapiens_gene_ensembl   # overrides the organism lookup
-# biomart_host: https://useast.ensembl.org # www.ensembl.org redirects BioMart requests
+# Gene symbol and biotype are read from the GTF, the entrez id from the Ensembl FTP
+# file derived from gtfFTP (.../gtf/<species>/X.gtf.gz -> .../tsv/<species>/X.entrez.tsv.gz).
+# Set entrezFTP to use another file (same format).
+# entrezFTP: https://ftp.ensembl.org/pub/release-115/tsv/homo_sapiens/Homo_sapiens.GRCh38.115.entrez.tsv.gz
 # Test mode: only dump the first N spots of every SRA run (0 = all reads)
 max_spots: 0
