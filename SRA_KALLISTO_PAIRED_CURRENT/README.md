@@ -79,4 +79,5 @@ Raw FASTQs, SRA files, the kallisto and salmon indices and the read subsets are 
 - Samples with several runs are handled correctly: the FASTQ files are passed to kallisto as `r1_run1 r2_run1 r1_run2 r2_run2 …`. Earlier versions passed all read-1 files followed by all read-2 files, which would pair the wrong mates for such samples.
 - Earlier versions named the columns of the count matrices from a `sample.id` column that does not exist in SRA run tables; the matrices are now named by `Sample Name`.
 - The strandedness option in earlier `config.yaml` files was ignored (salmon always ran).
+- During cluster testing Ensembl BioMart was unavailable (timeouts, 503, redirect to the status page), so the entrez/description lookup itself could not be exercised; only its fallback (`NA` columns, pipeline completes) was verified. The rest of the pipeline, including `se.rds`, was tested end to end.
 - License: MIT (see repository root).
