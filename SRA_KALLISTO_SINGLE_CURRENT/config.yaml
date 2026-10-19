@@ -1,9 +1,36 @@
 runtable: SraRunTable.csv
+
+# Ensembl annotation (GTF for tx2gene, cDNA FASTA for the kallisto index)
 gtfFTP: https://ftp.ensembl.org/pub/release-115/gtf/drosophila_melanogaster/Drosophila_melanogaster.BDGP6.54.115.gtf.gz
 transcriptsFTP: https://ftp.ensembl.org/pub/release-115/fasta/drosophila_melanogaster/cdna/Drosophila_melanogaster.BDGP6.54.cdna.all.fa.gz
+# optional: ncRNA FASTA that is appended to the transcriptome
 ncrnaFTP: https://ftp.ensembl.org/pub/release-115/fasta/drosophila_melanogaster/ncrna/Drosophila_melanogaster.BDGP6.54.ncrna.fa.gz
-strandedness: none
-organism: drosophila
 annotationVersion: 115
-frag_mean: 180        # mean fragment length (~250bp size-selected, ~180bp effective insert)
-frag_sd: 30           # fragment length SD
+
+# human, mouse, rat, drosophila, zebrafish (used for the biomaRt annotation in
+# se.rds; for other species set biomart_dataset below)
+organism: drosophila
+
+# Library strandedness for kallisto:
+#   auto       - detect with salmon on a 100k-read subset of the first run
+#   none       - unstranded
+#   forward    - reads are sense (--fr-stranded)
+#   reverse    - reads are antisense, e.g. dUTP/TruSeq stranded (--rf-stranded)
+strandedness: auto
+
+# Single-end reads carry no fragment length: kallisto needs mean and SD (bp)
+# of the fragment length distribution (from the library prep / bioanalyzer)
+frag_mean: 180
+frag_sd: 30
+
+# kallisto bootstrap samples
+bootstraps: 30
+
+# --- optional -----------------------------------------------------------
+# Gene symbol and biotype are read from the GTF. Entrez id and description are
+# added from biomaRt if it is reachable (NA otherwise).
+# biomart: false                           # skip biomaRt completely
+# biomart_dataset: dmelanogaster_gene_ensembl   # overrides the organism lookup
+# biomart_host: https://useast.ensembl.org # www.ensembl.org redirects BioMart requests
+# Test mode: only dump the first N spots of every SRA run (0 = all reads)
+max_spots: 0

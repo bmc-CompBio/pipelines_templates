@@ -1,39 +1,24 @@
-# scripts/determine_strandedness.py
-# Supports salmon >= 1.10 (reads meta_info.json library_types)
-# and older salmon (reads lib_format_counts.json strand_mapping_bias)
-
+# Translate the library type detected by salmon (--libType A) into the
+# strandedness used for kallisto. Supports salmon >= 1.10 (meta_info.json,
+# "library_types": SR / SF / U) and the strand bias of lib_format_counts.json.
 import json
 
-def main():
-    with open(snakemake.input.json) as f:
-        data = json.load(f)
+with open(snakemake.input.json) as f:
+    data = json.load(f)
 
-    # salmon >= 1.10: meta_info.json has library_types list e.g. ["ISR"], ["ISF"], ["U"]
-    if "library_types" in data:
-        lib_types = data["library_types"]
-        # ISR = inward, stranded, reverse  -> reverse
-        # ISF = inward, stranded, forward  -> forward
-        # U / IU = unstranded
-        if any(t in ("ISR", "SR") for t in lib_types):
-            strandedness = "reverse"
-        elif any(t in ("ISF", "SF") for t in lib_types):
-            strandedness = "forward"
-        else:
-            strandedness = "unstranded"
-    # older salmon: lib_format_counts.json has strand_mapping_bias
-    elif "strand_mapping_bias" in data:
-        bias = data["strand_mapping_bias"]
-        if bias < 0.2:
-            strandedness = "reverse"
-        elif bias > 0.8:
-            strandedness = "forward"
-        else:
-            strandedness = "unstranded"
+if "library_types" in data:
+    types = data["library_types"]
+    if any(t in ("ISR", "SR") for t in types):
+        strandedness = "reverse"
+    elif any(t in ("ISF", "SF") for t in types):
+        strandedness = "forward"
     else:
         strandedness = "unstranded"
+elif "strand_mapping_bias" in data:
+    bias = data["strand_mapping_bias"]
+    strandedness = "reverse" if bias < 0.2 else "forward" if bias > 0.8 else "unstranded"
+else:
+    strandedness = "unstranded"
 
-    with open(snakemake.output.strandedness, "w") as f:
-        f.write(strandedness)
-
-if __name__ == "__main__":
-    main()
+with open(snakemake.output.strandedness, "w") as f:
+    f.write(strandedness + "\n")
